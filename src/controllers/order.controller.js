@@ -6,13 +6,20 @@ const { buildQueryFeatures } = require('../utils/apiFeatures');
 const { buildInvoicePdfBuffer } = require('../utils/invoicePdf');
 
 const DEFAULT_GST_RATE = 18;
+const INVOICE_RETRY_LIMIT = 3;
 
 const toMoney = (value) => Number(value.toFixed(2));
 
 const createOrder = asyncHandler(async (req, res) => {
   const { customer, items, gstRate = DEFAULT_GST_RATE } = req.body;
 
-  const productIds = [...new Set(items.map((item) => item.product))];
+  const requestedQuantityByProduct = items.reduce((acc, item) => {
+    const key = String(item.product);
+    acc.set(key, (acc.get(key) || 0) + Number(item.quantity));
+    return acc;
+  }, new Map());
+
+  const productIds = [...requestedQuantityByProduct.keys()];
   const products = await Product.find({ _id: { $in: productIds } });
   const productMap = new Map(products.map((product) => [String(product._id), product]));
 
@@ -32,39 +39,74 @@ const createOrder = asyncHandler(async (req, res) => {
     };
   });
 
+  await Promise.all(
+    [...requestedQuantityByProduct.entries()].map(async ([productId, quantity]) => {
+      const updateResult = await Product.updateOne(
+        { _id: productId, stock: { $gte: quantity } },
+        {
+          $inc: { stock: -quantity },
+          $set: { updatedAt: new Date() }
+        }
+      );
+
+      if (updateResult.modifiedCount !== 1) {
+        const latestProduct = await Product.findById(productId, 'name stock');
+        const productName = latestProduct?.name || productId;
+        const remainingStock = latestProduct?.stock ?? 0;
+        throw createHttpError(
+          409,
+          `Stock changed while processing order for ${productName}. Remaining stock: ${remainingStock}`
+        );
+      }
+    })
+  );
+
   const subtotal = normalizedItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
   const costAmount = normalizedItems.reduce((sum, item) => sum + item.quantity * item.unitCost, 0);
   const taxAmount = subtotal * (Number(gstRate) / 100);
   const totalAmount = subtotal + taxAmount;
   const profitAmount = totalAmount - taxAmount - costAmount;
+  let order;
+  const buildInvoiceNumber = () => {
+    const now = new Date();
+    return `INV-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${Math.floor(100000 + Math.random() * 900000)}`;
+  };
 
-  const now = new Date();
-  const invoiceNumber = `INV-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${Math.floor(100000 + Math.random() * 900000)}`;
-
-  const order = await Order.create({
-    customer,
-    items: normalizedItems,
-    subtotal: toMoney(subtotal),
-    taxRate: Number(gstRate),
-    taxAmount: toMoney(taxAmount),
-    totalAmount: toMoney(totalAmount),
-    costAmount: toMoney(costAmount),
-    profitAmount: toMoney(profitAmount),
-    invoiceNumber,
-    createdBy: req.user._id
-  });
-
-  await Promise.all(
-    normalizedItems.map((item) =>
-      Product.updateOne(
-        { _id: item.product },
-        {
-          $inc: { stock: -item.quantity },
-          $set: { updatedAt: new Date() }
+  try {
+    for (let attempt = 1; attempt <= INVOICE_RETRY_LIMIT; attempt += 1) {
+      const invoiceNumber = buildInvoiceNumber();
+      try {
+        order = await Order.create({
+          customer,
+          items: normalizedItems,
+          subtotal: toMoney(subtotal),
+          taxRate: Number(gstRate),
+          taxAmount: toMoney(taxAmount),
+          totalAmount: toMoney(totalAmount),
+          costAmount: toMoney(costAmount),
+          profitAmount: toMoney(profitAmount),
+          invoiceNumber,
+          createdBy: req.user._id
+        });
+        break;
+      } catch (error) {
+        if (error?.code === 11000 && attempt < INVOICE_RETRY_LIMIT) {
+          continue;
         }
+        throw error;
+      }
+    }
+    if (!order) {
+      throw createHttpError(500, 'Unable to generate invoice number');
+    }
+  } catch (error) {
+    await Promise.all(
+      [...requestedQuantityByProduct.entries()].map(([productId, quantity]) =>
+        Product.updateOne({ _id: productId }, { $inc: { stock: quantity }, $set: { updatedAt: new Date() } })
       )
-    )
-  );
+    );
+    throw error;
+  }
 
   const updatedProducts = await Product.find({ _id: { $in: productIds } }, 'name sku stock lowStockThreshold').lean();
   const lowStockAlerts = updatedProducts

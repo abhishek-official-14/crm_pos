@@ -87,7 +87,6 @@ export const api = {
       fullName: payload.fullName,
       email: payload.email,
       password: payload.password,
-      role: payload.role || 'STAFF',
     });
     return data.data;
   },

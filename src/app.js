@@ -6,15 +6,22 @@ const createHttpError = require('http-errors');
 const routes = require('./routes');
 const apiRateLimiter = require('./middlewares/rateLimit.middleware');
 const errorHandler = require('./middlewares/error.middleware');
+const env = require('./config/env');
 
 const app = express();
 
 // Security middleware.
 app.use(helmet());
-app.use(cors());
+const allowAllOrigins = env.corsOrigins.includes('*');
+app.use(
+  cors({
+    origin: allowAllOrigins ? true : env.corsOrigins,
+    optionsSuccessStatus: 204
+  })
+);
 
 // Request parsing middleware.
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Logging + abuse protection.
