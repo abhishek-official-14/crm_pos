@@ -1,15 +1,18 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Button from '../../components/common/Button';
+import ErrorState from '../../components/common/ErrorState';
 import Input from '../../components/common/Input';
+import { useAppContext } from '../../context/AppContext';
 import { validateEmail, validatePassword } from '../../utils/validators';
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const { login, loading, errors } = useAppContext();
   const [form, setForm] = useState({ email: '', password: '' });
-  const [errors, setErrors] = useState({});
+  const [fieldErrors, setFieldErrors] = useState({});
 
-  const submit = (event) => {
+  const submit = async (event) => {
     event.preventDefault();
     const nextErrors = {
       email: validateEmail(form.email),
@@ -17,12 +20,17 @@ export default function LoginPage() {
     };
 
     if (Object.values(nextErrors).some(Boolean)) {
-      setErrors(nextErrors);
+      setFieldErrors(nextErrors);
       return;
     }
 
-    setErrors({});
-    navigate('/dashboard');
+    setFieldErrors({});
+    try {
+      await login(form);
+      navigate('/dashboard');
+    } catch {
+      // handled by context error state
+    }
   };
 
   return (
@@ -32,16 +40,19 @@ export default function LoginPage() {
         type="email"
         value={form.email}
         onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
-        error={errors.email}
+        error={fieldErrors.email}
       />
       <Input
         label="Password"
         type="password"
         value={form.password}
         onChange={(event) => setForm((prev) => ({ ...prev, password: event.target.value }))}
-        error={errors.password}
+        error={fieldErrors.password}
       />
-      <Button type="submit">Sign In</Button>
+      <Button type="submit" disabled={loading.auth}>
+        {loading.auth ? 'Signing in...' : 'Sign In'}
+      </Button>
+      {errors.auth && <ErrorState message={errors.auth} />}
       <p>
         New here? <Link to="/register">Create account</Link>
       </p>
