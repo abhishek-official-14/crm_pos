@@ -16,6 +16,12 @@ const orderItemSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 0
+    },
+    unitCost: {
+      type: Number,
+      required: true,
+      min: 0,
+      default: 0
     }
   },
   { _id: false }
@@ -32,10 +38,44 @@ const orderSchema = new mongoose.Schema(
       type: [orderItemSchema],
       validate: [(items) => items.length > 0, 'Order requires at least one item']
     },
+    subtotal: {
+      type: Number,
+      required: true,
+      min: 0,
+      default: 0
+    },
+    taxRate: {
+      type: Number,
+      required: true,
+      min: 0,
+      default: 18
+    },
+    taxAmount: {
+      type: Number,
+      required: true,
+      min: 0,
+      default: 0
+    },
     totalAmount: {
       type: Number,
       required: true,
       min: 0
+    },
+    costAmount: {
+      type: Number,
+      required: true,
+      min: 0,
+      default: 0
+    },
+    profitAmount: {
+      type: Number,
+      required: true,
+      default: 0
+    },
+    invoiceNumber: {
+      type: String,
+      trim: true,
+      unique: true
     },
     status: {
       type: String,

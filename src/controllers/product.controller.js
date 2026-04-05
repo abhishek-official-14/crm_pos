@@ -3,7 +3,13 @@ const asyncHandler = require('../middlewares/asyncHandler');
 const { buildQueryFeatures } = require('../utils/apiFeatures');
 
 const createProduct = asyncHandler(async (req, res) => {
-  const product = await Product.create({ ...req.body, createdBy: req.user._id });
+  const payload = {
+    ...req.body,
+    costPrice: req.body.costPrice ?? req.body.price ?? 0,
+    createdBy: req.user._id
+  };
+
+  const product = await Product.create(payload);
   res.status(201).json({ success: true, data: product });
 });
 

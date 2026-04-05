@@ -10,31 +10,48 @@ import { useAppContext } from '../context/AppContext';
 import { validateRequired } from '../utils/validators';
 
 export default function PosPage() {
-  const { products, customers, addOrder, addProduct, loading, errors } = useAppContext();
-  const [orderForm, setOrderForm] = useState({ productId: '', customerId: '', quantity: 1 });
-  const [productForm, setProductForm] = useState({ name: '', sku: '', price: '', stock: '' });
+  const { products, customers, addOrder, addProduct, lowStockAlerts, downloadInvoicePdf, loading, errors } = useAppContext();
+  const [orderForm, setOrderForm] = useState({ productId: '', customerId: '', quantity: 1, gstRate: 18 });
+  const [productForm, setProductForm] = useState({
+    name: '',
+    sku: '',
+    price: '',
+    costPrice: '',
+    stock: '',
+    lowStockThreshold: '10',
+  });
   const [query, setQuery] = useState('');
   const [stockFilter, setStockFilter] = useState('all');
   const [orderErrors, setOrderErrors] = useState({});
   const [productErrors, setProductErrors] = useState({});
   const [orderSuccess, setOrderSuccess] = useState('');
   const [productSuccess, setProductSuccess] = useState('');
+  const [latestOrderId, setLatestOrderId] = useState('');
 
   const filteredProducts = useMemo(
     () =>
       products.filter((product) => {
-        const matchesQuery = product.name.toLowerCase().includes(query.toLowerCase());
+        const queryLC = query.toLowerCase();
+        const matchesQuery =
+          product.name.toLowerCase().includes(queryLC) ||
+          String(product.sku || '')
+            .toLowerCase()
+            .includes(queryLC);
+        const threshold = product.lowStockThreshold ?? 10;
         const matchesFilter =
           stockFilter === 'all' ||
-          (stockFilter === 'in' && product.stock > 0) ||
-          (stockFilter === 'low' && product.stock > 0 && product.stock <= 10);
+          (stockFilter === 'in' && product.stock > threshold) ||
+          (stockFilter === 'low' && product.stock > 0 && product.stock <= threshold) ||
+          (stockFilter === 'out' && product.stock === 0);
         return matchesQuery && matchesFilter;
       }),
     [products, query, stockFilter],
   );
 
   const selectedProduct = products.find((item) => String(item.id) === String(orderForm.productId));
-  const total = selectedProduct ? Number(selectedProduct.price) * Number(orderForm.quantity || 0) : 0;
+  const subtotal = selectedProduct ? Number(selectedProduct.price) * Number(orderForm.quantity || 0) : 0;
+  const gstAmount = subtotal * (Number(orderForm.gstRate || 0) / 100);
+  const total = subtotal + gstAmount;
 
   const submitOrder = async (event) => {
     event.preventDefault();
@@ -43,6 +60,7 @@ export default function PosPage() {
       productId: validateRequired(orderForm.productId, 'Product'),
       customerId: validateRequired(orderForm.customerId, 'Customer'),
       quantity: Number(orderForm.quantity) > 0 ? '' : 'Quantity must be greater than 0',
+      gstRate: Number(orderForm.gstRate) >= 0 ? '' : 'GST must be 0 or higher',
     };
 
     if (Object.values(nextErrors).some(Boolean)) {
@@ -53,9 +71,10 @@ export default function PosPage() {
     setOrderErrors({});
 
     try {
-      await addOrder(orderForm);
-      setOrderForm({ productId: '', customerId: '', quantity: 1 });
-      setOrderSuccess('Order placed successfully.');
+      const order = await addOrder(orderForm);
+      setLatestOrderId(order.id);
+      setOrderForm({ productId: '', customerId: '', quantity: 1, gstRate: orderForm.gstRate });
+      setOrderSuccess('Order placed successfully. Inventory and analytics updated.');
     } catch {
       // handled by context
     }
@@ -69,7 +88,9 @@ export default function PosPage() {
       name: validateRequired(productForm.name, 'Name'),
       sku: validateRequired(productForm.sku, 'SKU'),
       price: Number(productForm.price) >= 0 ? '' : 'Price must be 0 or higher',
+      costPrice: Number(productForm.costPrice) >= 0 ? '' : 'Cost price must be 0 or higher',
       stock: Number(productForm.stock) >= 0 ? '' : 'Stock must be 0 or higher',
+      lowStockThreshold: Number(productForm.lowStockThreshold) >= 0 ? '' : 'Threshold must be 0 or higher',
     };
 
     if (Object.values(nextErrors).some(Boolean)) {
@@ -84,9 +105,11 @@ export default function PosPage() {
         name: productForm.name,
         sku: productForm.sku,
         price: Number(productForm.price),
+        costPrice: Number(productForm.costPrice),
         stock: Number(productForm.stock),
+        lowStockThreshold: Number(productForm.lowStockThreshold),
       });
-      setProductForm({ name: '', sku: '', price: '', stock: '' });
+      setProductForm({ name: '', sku: '', price: '', costPrice: '', stock: '', lowStockThreshold: '10' });
       setProductSuccess('Product created successfully.');
     } catch {
       // handled by context
@@ -97,6 +120,13 @@ export default function PosPage() {
     <div className="page-grid two-columns">
       <div>
         <h1>POS Billing UI</h1>
+        {lowStockAlerts.length > 0 && (
+          <div className="status warning">
+            <div>
+              <strong>Low stock alerts:</strong> {lowStockAlerts.map((item) => `${item.name} (${item.stock})`).join(', ')}
+            </div>
+          </div>
+        )}
         <Card title="Product Catalog">
           <SearchFilterBar
             query={query}
@@ -106,7 +136,8 @@ export default function PosPage() {
             filterOptions={[
               { label: 'All stock', value: 'all' },
               { label: 'In stock', value: 'in' },
-              { label: 'Low stock (<=10)', value: 'low' },
+              { label: 'Low stock', value: 'low' },
+              { label: 'Out of stock', value: 'out' },
             ]}
           />
           <div className="table-wrap">
@@ -116,21 +147,23 @@ export default function PosPage() {
                   <th>Name</th>
                   <th>SKU</th>
                   <th>Price</th>
+                  <th>Cost</th>
                   <th>Stock</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredProducts.map((product) => (
-                  <tr key={product.id}>
+                  <tr key={product.id} className={product.stock <= (product.lowStockThreshold ?? 10) ? 'row-low-stock' : ''}>
                     <td>{product.name}</td>
                     <td>{product.sku}</td>
-                    <td>${product.price}</td>
+                    <td>${Number(product.price).toFixed(2)}</td>
+                    <td>${Number(product.costPrice || 0).toFixed(2)}</td>
                     <td>{product.stock}</td>
                   </tr>
                 ))}
                 {filteredProducts.length === 0 && (
                   <tr>
-                    <td colSpan="4">No products found.</td>
+                    <td colSpan="5">No products found.</td>
                   </tr>
                 )}
               </tbody>
@@ -173,10 +206,29 @@ export default function PosPage() {
               error={orderErrors.quantity}
             />
 
-            <p className="total-row">Total: ${total.toFixed(2)}</p>
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              label="GST %"
+              value={orderForm.gstRate}
+              onChange={(event) => setOrderForm((prev) => ({ ...prev, gstRate: event.target.value }))}
+              error={orderErrors.gstRate}
+            />
+
+            <div className="totals-stack">
+              <p className="total-row">Subtotal: ${subtotal.toFixed(2)}</p>
+              <p className="total-row">GST: ${gstAmount.toFixed(2)}</p>
+              <p className="total-row">Grand Total: ${total.toFixed(2)}</p>
+            </div>
             <Button type="submit" disabled={loading.addOrder}>
               {loading.addOrder ? 'Placing...' : 'Place Order'}
             </Button>
+            {latestOrderId && (
+              <Button type="button" onClick={() => downloadInvoicePdf(latestOrderId)}>
+                Download Invoice PDF
+              </Button>
+            )}
             {loading.addOrder && <Loader label="Submitting order..." />}
             {errors.addOrder && <ErrorState message={errors.addOrder} />}
             {orderSuccess && <div className="status success">{orderSuccess}</div>}
@@ -209,10 +261,27 @@ export default function PosPage() {
             <Input
               type="number"
               min="0"
+              step="0.01"
+              label="Cost Price"
+              value={productForm.costPrice}
+              onChange={(event) => setProductForm((prev) => ({ ...prev, costPrice: event.target.value }))}
+              error={productErrors.costPrice}
+            />
+            <Input
+              type="number"
+              min="0"
               label="Stock"
               value={productForm.stock}
               onChange={(event) => setProductForm((prev) => ({ ...prev, stock: event.target.value }))}
               error={productErrors.stock}
+            />
+            <Input
+              type="number"
+              min="0"
+              label="Low Stock Threshold"
+              value={productForm.lowStockThreshold}
+              onChange={(event) => setProductForm((prev) => ({ ...prev, lowStockThreshold: event.target.value }))}
+              error={productErrors.lowStockThreshold}
             />
             <Button type="submit" disabled={loading.addProduct}>
               {loading.addProduct ? 'Saving...' : 'Save Product'}

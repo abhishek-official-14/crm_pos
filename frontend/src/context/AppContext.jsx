@@ -9,6 +9,8 @@ const initialLoading = {
   addCustomer: false,
   addOrder: false,
   addProduct: false,
+  analytics: false,
+  exportCsv: false,
 };
 
 const initialErrors = {
@@ -17,6 +19,8 @@ const initialErrors = {
   addCustomer: '',
   addOrder: '',
   addProduct: '',
+  analytics: '',
+  exportCsv: '',
 };
 
 export function AppProvider({ children }) {
@@ -27,6 +31,8 @@ export function AppProvider({ children }) {
   const [customers, setCustomers] = useState([]);
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [analytics, setAnalytics] = useState({ daily: [], monthly: [] });
+  const [lowStockAlerts, setLowStockAlerts] = useState([]);
 
   const [loading, setLoading] = useState(initialLoading);
   const [errors, setErrors] = useState(initialErrors);
@@ -43,6 +49,8 @@ export function AppProvider({ children }) {
     setCustomers([]);
     setProducts([]);
     setOrders([]);
+    setAnalytics({ daily: [], monthly: [] });
+    setLowStockAlerts([]);
   }, []);
 
   const setAuthData = useCallback((authToken, authUser) => {
@@ -60,6 +68,76 @@ export function AppProvider({ children }) {
     setErrors(initialErrors);
     setLoading(initialLoading);
   }, [resetDomainData]);
+
+  const fetchAnalytics = useCallback(async () => {
+    updateLoading('analytics', true);
+    updateError('analytics', '');
+    try {
+      const [daily, monthly] = await Promise.all([
+        api.getOrderAnalytics({ period: 'daily' }),
+        api.getOrderAnalytics({ period: 'monthly' }),
+      ]);
+      setAnalytics({ daily: daily.items, monthly: monthly.items });
+    } catch (error) {
+      updateError('analytics', extractErrorMessage(error, 'Unable to fetch analytics.'));
+    } finally {
+      updateLoading('analytics', false);
+    }
+  }, [updateError, updateLoading]);
+
+  const bootstrapData = useCallback(async () => {
+    if (!authStorage.getToken()) {
+      resetDomainData();
+      return;
+    }
+
+    updateLoading('bootstrap', true);
+    updateError('bootstrap', '');
+
+    try {
+      const [customerData, productData, orderData] = await Promise.all([
+        api.getCustomers({ page: 1, limit: 100 }),
+        api.getProducts({ page: 1, limit: 100 }),
+        api.getOrders({ page: 1, limit: 100 }),
+      ]);
+      setCustomers(customerData.items);
+      setProducts(productData.items);
+      setOrders(orderData.items);
+      const lowStock = productData.items.filter((product) => product.stock <= (product.lowStockThreshold ?? 10));
+      setLowStockAlerts(lowStock);
+      fetchAnalytics();
+    } catch (error) {
+      const message = extractErrorMessage(error, 'Failed to load data. Please retry.');
+      updateError('bootstrap', message);
+      if (error?.response?.status === 401) {
+        logout();
+      }
+    } finally {
+      updateLoading('bootstrap', false);
+    }
+  }, [fetchAnalytics, logout, resetDomainData, updateError, updateLoading]);
+
+  useEffect(() => {
+    const storedToken = authStorage.getToken();
+    const storedUser = authStorage.getUser();
+
+    if (storedToken && storedUser) {
+      setToken(storedToken);
+      setUser(storedUser);
+    }
+
+    setAuthReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!authReady) return;
+    if (!token) {
+      resetDomainData();
+      return;
+    }
+
+    bootstrapData();
+  }, [authReady, token, bootstrapData, resetDomainData]);
 
   const login = useCallback(
     async (payload) => {
@@ -96,57 +174,6 @@ export function AppProvider({ children }) {
     },
     [updateError, updateLoading],
   );
-
-  const bootstrapData = useCallback(async () => {
-    if (!authStorage.getToken()) {
-      resetDomainData();
-      return;
-    }
-
-    updateLoading('bootstrap', true);
-    updateError('bootstrap', '');
-
-    try {
-      const [customerData, productData, orderData] = await Promise.all([
-        api.getCustomers({ page: 1, limit: 100 }),
-        api.getProducts({ page: 1, limit: 100 }),
-        api.getOrders({ page: 1, limit: 100 }),
-      ]);
-      setCustomers(customerData.items);
-      setProducts(productData.items);
-      setOrders(orderData.items);
-    } catch (error) {
-      const message = extractErrorMessage(error, 'Failed to load data. Please retry.');
-      updateError('bootstrap', message);
-      if (error?.response?.status === 401) {
-        logout();
-      }
-    } finally {
-      updateLoading('bootstrap', false);
-    }
-  }, [logout, resetDomainData, updateError, updateLoading]);
-
-  useEffect(() => {
-    const storedToken = authStorage.getToken();
-    const storedUser = authStorage.getUser();
-
-    if (storedToken && storedUser) {
-      setToken(storedToken);
-      setUser(storedUser);
-    }
-
-    setAuthReady(true);
-  }, []);
-
-  useEffect(() => {
-    if (!authReady) return;
-    if (!token) {
-      resetDomainData();
-      return;
-    }
-
-    bootstrapData();
-  }, [authReady, token, bootstrapData, resetDomainData]);
 
   const addCustomer = useCallback(
     async (payload) => {
@@ -187,16 +214,35 @@ export function AppProvider({ children }) {
   );
 
   const addOrder = useCallback(
-    async ({ productId, customerId, quantity }) => {
+    async ({ productId, customerId, quantity, gstRate }) => {
       updateLoading('addOrder', true);
       updateError('addOrder', '');
       try {
-        const created = await api.createOrder({
+        const response = await api.createOrder({
           customer: customerId,
+          gstRate: Number(gstRate),
           items: [{ product: productId, quantity: Number(quantity) }],
         });
-        setOrders((prev) => [created, ...prev]);
-        return created;
+
+        setOrders((prev) => [response.order, ...prev]);
+
+        if (Array.isArray(response.meta?.updatedProducts) && response.meta.updatedProducts.length > 0) {
+          setProducts((prevProducts) => {
+            const map = new Map(prevProducts.map((product) => [String(product.id), product]));
+            response.meta.updatedProducts.forEach((updated) => {
+              const key = String(updated._id || updated.id);
+              const existing = map.get(key);
+              if (existing) {
+                map.set(key, { ...existing, ...updated, id: key });
+              }
+            });
+            return Array.from(map.values());
+          });
+        }
+
+        setLowStockAlerts(response.meta?.lowStockAlerts || []);
+        fetchAnalytics();
+        return response.order;
       } catch (error) {
         const message = extractErrorMessage(error, 'Unable to place order right now.');
         updateError('addOrder', message);
@@ -205,8 +251,62 @@ export function AppProvider({ children }) {
         updateLoading('addOrder', false);
       }
     },
-    [updateError, updateLoading],
+    [fetchAnalytics, updateError, updateLoading],
   );
+
+  const downloadInvoicePdf = useCallback(
+    async (orderId) => {
+      const authToken = authStorage.getToken();
+      const response = await fetch(api.getOrderInvoiceDownloadUrl(orderId), {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Unable to download invoice right now.');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `invoice-${orderId}.pdf`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    },
+    [],
+  );
+
+  const exportOrdersCsv = useCallback(async () => {
+    updateLoading('exportCsv', true);
+    updateError('exportCsv', '');
+    try {
+      const authToken = authStorage.getToken();
+      const response = await fetch(api.getOrdersCsvExportUrl(), {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('CSV export failed.');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'orders-report.csv';
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      updateError('exportCsv', extractErrorMessage(error, 'Unable to export CSV report.'));
+      throw error;
+    } finally {
+      updateLoading('exportCsv', false);
+    }
+  }, [updateError, updateLoading]);
 
   const value = useMemo(
     () => ({
@@ -217,15 +317,20 @@ export function AppProvider({ children }) {
       customers,
       products,
       orders,
+      analytics,
+      lowStockAlerts,
       loading,
       errors,
       login,
       register,
       logout,
       bootstrapData,
+      fetchAnalytics,
       addCustomer,
       addProduct,
       addOrder,
+      downloadInvoicePdf,
+      exportOrdersCsv,
     }),
     [
       authReady,
@@ -234,15 +339,20 @@ export function AppProvider({ children }) {
       customers,
       products,
       orders,
+      analytics,
+      lowStockAlerts,
       loading,
       errors,
       login,
       register,
       logout,
       bootstrapData,
+      fetchAnalytics,
       addCustomer,
       addProduct,
       addOrder,
+      downloadInvoicePdf,
+      exportOrdersCsv,
     ],
   );
 
