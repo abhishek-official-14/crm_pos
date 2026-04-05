@@ -46,6 +46,18 @@ a {
   opacity: 1;
 }
 
+.sidebar-user {
+  margin: 0 0 0.75rem;
+  opacity: 0.8;
+  font-size: 0.9rem;
+}
+
+.sidebar .btn-ghost {
+  margin-top: 1rem;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
 .content {
   padding: 1.2rem;
 }

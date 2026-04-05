@@ -6,53 +6,49 @@ import Input from '../components/common/Input';
 import Loader from '../components/common/Loader';
 import Pagination from '../components/common/Pagination';
 import SearchFilterBar from '../components/common/SearchFilterBar';
-import Select from '../components/common/Select';
 import { useAppContext } from '../context/AppContext';
 import usePagination from '../hooks/usePagination';
 import { validateEmail, validateRequired } from '../utils/validators';
 
 export default function CrmPage() {
-  const { customers, addCustomer, loading, error } = useAppContext();
+  const { customers, addCustomer, loading, errors } = useAppContext();
   const [query, setQuery] = useState('');
-  const [tier, setTier] = useState('all');
-  const [form, setForm] = useState({ name: '', email: '', phone: '', tier: 'Bronze' });
+  const [form, setForm] = useState({ name: '', email: '', phone: '' });
   const [formErrors, setFormErrors] = useState({});
 
   const filteredCustomers = useMemo(
     () =>
-      customers.filter((customer) => {
-        const matchesQuery = `${customer.name} ${customer.email} ${customer.phone}`
+      customers.filter((customer) =>
+        `${customer.name} ${customer.email || ''} ${customer.phone || ''}`
           .toLowerCase()
-          .includes(query.toLowerCase());
-        const matchesTier = tier === 'all' || customer.tier === tier;
-        return matchesQuery && matchesTier;
-      }),
-    [customers, query, tier],
+          .includes(query.toLowerCase()),
+      ),
+    [customers, query],
   );
 
   const { page, totalPages, currentItems, goToPage, setPage } = usePagination(filteredCustomers, 4);
 
-  const handleFilterChange = (event) => {
-    setTier(event.target.value);
-    setPage(1);
-  };
-
   const submit = async (event) => {
     event.preventDefault();
-    const errors = {
+    const nextErrors = {
       name: validateRequired(form.name, 'Name'),
-      email: validateEmail(form.email),
+      email: form.email ? validateEmail(form.email) : '',
       phone: validateRequired(form.phone, 'Phone'),
     };
 
-    if (Object.values(errors).some(Boolean)) {
-      setFormErrors(errors);
+    if (Object.values(nextErrors).some(Boolean)) {
+      setFormErrors(nextErrors);
       return;
     }
 
     setFormErrors({});
-    await addCustomer(form);
-    setForm({ name: '', email: '', phone: '', tier: 'Bronze' });
+
+    try {
+      await addCustomer(form);
+      setForm({ name: '', email: '', phone: '' });
+    } catch {
+      // handled by context
+    }
   };
 
   return (
@@ -66,14 +62,9 @@ export default function CrmPage() {
               setQuery(event.target.value);
               setPage(1);
             }}
-            filter={tier}
-            onFilterChange={handleFilterChange}
-            filterOptions={[
-              { label: 'All tiers', value: 'all' },
-              { label: 'Gold', value: 'Gold' },
-              { label: 'Silver', value: 'Silver' },
-              { label: 'Bronze', value: 'Bronze' },
-            ]}
+            filter="all"
+            onFilterChange={() => {}}
+            filterOptions={[{ label: 'All', value: 'all' }]}
             queryLabel="Search customers"
           />
 
@@ -84,21 +75,19 @@ export default function CrmPage() {
                   <th>Name</th>
                   <th>Email</th>
                   <th>Phone</th>
-                  <th>Tier</th>
                 </tr>
               </thead>
               <tbody>
                 {currentItems.map((customer) => (
                   <tr key={customer.id}>
                     <td>{customer.name}</td>
-                    <td>{customer.email}</td>
-                    <td>{customer.phone}</td>
-                    <td>{customer.tier}</td>
+                    <td>{customer.email || '-'}</td>
+                    <td>{customer.phone || '-'}</td>
                   </tr>
                 ))}
                 {currentItems.length === 0 && (
                   <tr>
-                    <td colSpan="4">No customers found.</td>
+                    <td colSpan="3">No customers found.</td>
                   </tr>
                 )}
               </tbody>
@@ -129,21 +118,11 @@ export default function CrmPage() {
             onChange={(event) => setForm((prev) => ({ ...prev, phone: event.target.value }))}
             error={formErrors.phone}
           />
-          <Select
-            label="Tier"
-            value={form.tier}
-            onChange={(event) => setForm((prev) => ({ ...prev, tier: event.target.value }))}
-            options={[
-              { label: 'Gold', value: 'Gold' },
-              { label: 'Silver', value: 'Silver' },
-              { label: 'Bronze', value: 'Bronze' },
-            ]}
-          />
-          <Button type="submit" disabled={loading}>
-            {loading ? 'Saving...' : 'Save Customer'}
+          <Button type="submit" disabled={loading.addCustomer}>
+            {loading.addCustomer ? 'Saving...' : 'Save Customer'}
           </Button>
-          {loading && <Loader label="Saving customer..." />}
-          {error && <ErrorState message={error} />}
+          {loading.addCustomer && <Loader label="Saving customer..." />}
+          {errors.addCustomer && <ErrorState message={errors.addCustomer} />}
         </form>
       </Card>
     </div>
