@@ -6,13 +6,14 @@ export default function SearchFilterBar({
   onQueryChange,
   filter,
   onFilterChange,
-  filterOptions,
+  filterOptions = [],
   queryLabel = 'Search',
+  showFilter = true,
 }) {
   return (
     <div className="search-filter-grid">
       <Input label={queryLabel} placeholder="Type to search..." value={query} onChange={onQueryChange} />
-      <Select label="Filter" value={filter} onChange={onFilterChange} options={filterOptions} />
+      {showFilter && <Select label="Filter" value={filter} onChange={onFilterChange} options={filterOptions} />}
     </div>
   );
 }

@@ -90,5 +90,8 @@ const orderSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+orderSchema.index({ createdAt: -1 });
+orderSchema.index({ customer: 1, createdAt: -1 });
+orderSchema.index({ createdBy: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Order', orderSchema);

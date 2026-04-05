@@ -1,6 +1,7 @@
 const Product = require('../models/product.model');
 const asyncHandler = require('../middlewares/asyncHandler');
 const { buildQueryFeatures } = require('../utils/apiFeatures');
+const { fetchPaginatedResults } = require('../utils/paginatedQuery');
 
 const createProduct = asyncHandler(async (req, res) => {
   const payload = {
@@ -19,15 +20,20 @@ const getProducts = asyncHandler(async (req, res) => {
     searchableFields: ['name', 'sku']
   });
 
-  const [products, total] = await Promise.all([
-    Product.find(search).skip(skip).limit(limit).sort({ createdAt: -1 }),
-    Product.countDocuments(search)
-  ]);
+  const { items, meta } = await fetchPaginatedResults({
+    model: Product,
+    filter: search,
+    page,
+    limit,
+    skip,
+    select: 'name sku price costPrice stock lowStockThreshold createdAt updatedAt',
+    sort: { createdAt: -1 }
+  });
 
   res.json({
     success: true,
-    data: products,
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) }
+    data: items,
+    meta
   });
 });
 

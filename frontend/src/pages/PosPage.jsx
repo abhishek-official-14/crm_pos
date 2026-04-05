@@ -7,6 +7,7 @@ import Loader from '../components/common/Loader';
 import SearchFilterBar from '../components/common/SearchFilterBar';
 import Select from '../components/common/Select';
 import { useAppContext } from '../context/AppContext';
+import useDebouncedValue from '../hooks/useDebouncedValue';
 import { validateRequired } from '../utils/validators';
 
 export default function PosPage() {
@@ -21,6 +22,7 @@ export default function PosPage() {
     lowStockThreshold: '10',
   });
   const [query, setQuery] = useState('');
+  const debouncedQuery = useDebouncedValue(query, 180);
   const [stockFilter, setStockFilter] = useState('all');
   const [orderErrors, setOrderErrors] = useState({});
   const [productErrors, setProductErrors] = useState({});
@@ -31,7 +33,7 @@ export default function PosPage() {
   const filteredProducts = useMemo(
     () =>
       products.filter((product) => {
-        const queryLC = query.toLowerCase();
+        const queryLC = debouncedQuery.toLowerCase();
         const matchesQuery =
           product.name.toLowerCase().includes(queryLC) ||
           String(product.sku || '')
@@ -45,13 +47,22 @@ export default function PosPage() {
           (stockFilter === 'out' && product.stock === 0);
         return matchesQuery && matchesFilter;
       }),
-    [products, query, stockFilter],
+    [products, debouncedQuery, stockFilter],
   );
 
   const selectedProduct = products.find((item) => String(item.id) === String(orderForm.productId));
   const subtotal = selectedProduct ? Number(selectedProduct.price) * Number(orderForm.quantity || 0) : 0;
   const gstAmount = subtotal * (Number(orderForm.gstRate || 0) / 100);
   const total = subtotal + gstAmount;
+
+  const productOptions = useMemo(
+    () => [{ label: 'Select product', value: '' }, ...products.map((p) => ({ label: p.name, value: p.id }))],
+    [products],
+  );
+  const customerOptions = useMemo(
+    () => [{ label: 'Select customer', value: '' }, ...customers.map((c) => ({ label: c.name, value: c.id }))],
+    [customers],
+  );
 
   const submitOrder = async (event) => {
     event.preventDefault();
@@ -179,10 +190,7 @@ export default function PosPage() {
               label="Product"
               value={orderForm.productId}
               onChange={(event) => setOrderForm((prev) => ({ ...prev, productId: event.target.value }))}
-              options={[
-                { label: 'Select product', value: '' },
-                ...products.map((p) => ({ label: p.name, value: p.id })),
-              ]}
+              options={productOptions}
               error={orderErrors.productId}
             />
 
@@ -190,10 +198,7 @@ export default function PosPage() {
               label="Customer"
               value={orderForm.customerId}
               onChange={(event) => setOrderForm((prev) => ({ ...prev, customerId: event.target.value }))}
-              options={[
-                { label: 'Select customer', value: '' },
-                ...customers.map((c) => ({ label: c.name, value: c.id })),
-              ]}
+              options={customerOptions}
               error={orderErrors.customerId}
             />
 

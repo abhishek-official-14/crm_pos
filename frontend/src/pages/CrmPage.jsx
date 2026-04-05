@@ -7,12 +7,14 @@ import Loader from '../components/common/Loader';
 import Pagination from '../components/common/Pagination';
 import SearchFilterBar from '../components/common/SearchFilterBar';
 import { useAppContext } from '../context/AppContext';
+import useDebouncedValue from '../hooks/useDebouncedValue';
 import usePagination from '../hooks/usePagination';
 import { validateEmail, validateRequired } from '../utils/validators';
 
 export default function CrmPage() {
   const { customers, addCustomer, loading, errors } = useAppContext();
   const [query, setQuery] = useState('');
+  const debouncedQuery = useDebouncedValue(query, 180);
   const [form, setForm] = useState({ name: '', email: '', phone: '' });
   const [formErrors, setFormErrors] = useState({});
 
@@ -21,9 +23,9 @@ export default function CrmPage() {
       customers.filter((customer) =>
         `${customer.name} ${customer.email || ''} ${customer.phone || ''}`
           .toLowerCase()
-          .includes(query.toLowerCase()),
+          .includes(debouncedQuery.toLowerCase()),
       ),
-    [customers, query],
+    [customers, debouncedQuery],
   );
 
   const { page, totalPages, currentItems, goToPage, setPage } = usePagination(filteredCustomers, 4);
@@ -62,10 +64,8 @@ export default function CrmPage() {
               setQuery(event.target.value);
               setPage(1);
             }}
-            filter="all"
-            onFilterChange={() => {}}
-            filterOptions={[{ label: 'All', value: 'all' }]}
             queryLabel="Search customers"
+            showFilter={false}
           />
 
           <div className="table-wrap">
