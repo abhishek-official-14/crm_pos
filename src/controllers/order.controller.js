@@ -3,6 +3,7 @@ const Order = require('../models/order.model');
 const Product = require('../models/product.model');
 const asyncHandler = require('../middlewares/asyncHandler');
 const { buildQueryFeatures } = require('../utils/apiFeatures');
+const { fetchPaginatedResults } = require('../utils/paginatedQuery');
 const { buildInvoicePdfBuffer } = require('../utils/invoicePdf');
 
 const DEFAULT_GST_RATE = 18;
@@ -132,21 +133,24 @@ const createOrder = asyncHandler(async (req, res) => {
 const getOrders = asyncHandler(async (req, res) => {
   const { page, limit, skip } = buildQueryFeatures({ query: req.query });
 
-  const [orders, total] = await Promise.all([
-    Order.find()
-      .populate('customer', 'name email phone')
-      .populate('createdBy', 'fullName email')
-      .populate('items.product', 'name sku price costPrice')
-      .skip(skip)
-      .limit(limit)
-      .sort({ createdAt: -1 }),
-    Order.countDocuments()
-  ]);
+  const { items, meta } = await fetchPaginatedResults({
+    model: Order,
+    page,
+    limit,
+    skip,
+    sort: { createdAt: -1 },
+    select: 'invoiceNumber customer items subtotal taxRate taxAmount totalAmount costAmount profitAmount status createdBy createdAt',
+    populate: [
+      { path: 'customer', select: 'name email phone' },
+      { path: 'createdBy', select: 'fullName email' },
+      { path: 'items.product', select: 'name sku price costPrice' }
+    ]
+  });
 
   res.json({
     success: true,
-    data: orders,
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) }
+    data: items,
+    meta
   });
 });
 
@@ -174,6 +178,7 @@ const escapeCsv = (value) => {
 
 const exportOrdersCsv = asyncHandler(async (req, res) => {
   const orders = await Order.find()
+    .select('invoiceNumber createdAt customer items subtotal taxRate taxAmount totalAmount costAmount profitAmount status')
     .populate('customer', 'name email')
     .populate('items.product', 'name sku')
     .sort({ createdAt: -1 })

@@ -13,6 +13,24 @@ const initialLoading = {
   exportCsv: false,
 };
 
+const getEntityId = (entity) => String(entity?.id || entity?._id || '');
+
+const mergeEntityCollections = (existing = [], incoming = []) => {
+  const map = new Map(existing.map((item) => [getEntityId(item), item]));
+
+  incoming.forEach((item) => {
+    const key = getEntityId(item);
+    if (!key) return;
+    const previous = map.get(key) || {};
+    map.set(key, { ...previous, ...item, id: key });
+  });
+
+  return Array.from(map.values());
+};
+
+const getLowStockAlerts = (productItems = []) =>
+  productItems.filter((product) => Number(product.stock) <= Number(product.lowStockThreshold ?? 10));
+
 const initialErrors = {
   auth: '',
   bootstrap: '',
@@ -103,9 +121,8 @@ export function AppProvider({ children }) {
       setCustomers(customerData.items);
       setProducts(productData.items);
       setOrders(orderData.items);
-      const lowStock = productData.items.filter((product) => product.stock <= (product.lowStockThreshold ?? 10));
-      setLowStockAlerts(lowStock);
-      fetchAnalytics();
+      setLowStockAlerts(getLowStockAlerts(productData.items));
+      await fetchAnalytics();
     } catch (error) {
       const message = extractErrorMessage(error, 'Failed to load data. Please retry.');
       updateError('bootstrap', message);
@@ -200,7 +217,12 @@ export function AppProvider({ children }) {
       updateError('addProduct', '');
       try {
         const created = await api.createProduct(payload);
-        setProducts((prev) => [created, ...prev]);
+        let nextProducts = [];
+        setProducts((prev) => {
+          nextProducts = [created, ...prev];
+          return nextProducts;
+        });
+        setLowStockAlerts(getLowStockAlerts(nextProducts));
         return created;
       } catch (error) {
         const message = extractErrorMessage(error, 'Unable to create product right now.');
@@ -227,17 +249,7 @@ export function AppProvider({ children }) {
         setOrders((prev) => [response.order, ...prev]);
 
         if (Array.isArray(response.meta?.updatedProducts) && response.meta.updatedProducts.length > 0) {
-          setProducts((prevProducts) => {
-            const map = new Map(prevProducts.map((product) => [String(product.id), product]));
-            response.meta.updatedProducts.forEach((updated) => {
-              const key = String(updated._id || updated.id);
-              const existing = map.get(key);
-              if (existing) {
-                map.set(key, { ...existing, ...updated, id: key });
-              }
-            });
-            return Array.from(map.values());
-          });
+          setProducts((prevProducts) => mergeEntityCollections(prevProducts, response.meta.updatedProducts));
         }
 
         setLowStockAlerts(response.meta?.lowStockAlerts || []);

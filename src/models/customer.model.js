@@ -33,5 +33,6 @@ const customerSchema = new mongoose.Schema(
 );
 
 customerSchema.index({ name: 'text', email: 'text', phone: 'text' });
+customerSchema.index({ createdBy: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Customer', customerSchema);

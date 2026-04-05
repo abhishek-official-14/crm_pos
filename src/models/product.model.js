@@ -44,5 +44,7 @@ const productSchema = new mongoose.Schema(
 );
 
 productSchema.index({ name: 'text', sku: 'text' });
+productSchema.index({ createdBy: 1, createdAt: -1 });
+productSchema.index({ stock: 1, lowStockThreshold: 1 });
 
 module.exports = mongoose.model('Product', productSchema);
