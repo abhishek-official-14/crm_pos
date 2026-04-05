@@ -3,37 +3,88 @@ const Order = require('../models/order.model');
 const Product = require('../models/product.model');
 const asyncHandler = require('../middlewares/asyncHandler');
 const { buildQueryFeatures } = require('../utils/apiFeatures');
+const { buildInvoicePdfBuffer } = require('../utils/invoicePdf');
+
+const DEFAULT_GST_RATE = 18;
+
+const toMoney = (value) => Number(value.toFixed(2));
 
 const createOrder = asyncHandler(async (req, res) => {
-  const { customer, items } = req.body;
+  const { customer, items, gstRate = DEFAULT_GST_RATE } = req.body;
 
-  // Validate and compute order total based on canonical product prices.
-  const productIds = items.map((item) => item.product);
+  const productIds = [...new Set(items.map((item) => item.product))];
   const products = await Product.find({ _id: { $in: productIds } });
-
-  const priceMap = new Map(products.map((p) => [String(p._id), p]));
+  const productMap = new Map(products.map((product) => [String(product._id), product]));
 
   const normalizedItems = items.map((item) => {
-    const product = priceMap.get(String(item.product));
+    const product = productMap.get(String(item.product));
     if (!product) throw createHttpError(400, `Product not found: ${item.product}`);
+
+    if (product.stock < item.quantity) {
+      throw createHttpError(400, `Insufficient stock for ${product.name}. Remaining stock: ${product.stock}`);
+    }
 
     return {
       product: product._id,
       quantity: item.quantity,
-      unitPrice: product.price
+      unitPrice: product.price,
+      unitCost: product.costPrice
     };
   });
 
-  const totalAmount = normalizedItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+  const subtotal = normalizedItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+  const costAmount = normalizedItems.reduce((sum, item) => sum + item.quantity * item.unitCost, 0);
+  const taxAmount = subtotal * (Number(gstRate) / 100);
+  const totalAmount = subtotal + taxAmount;
+  const profitAmount = totalAmount - taxAmount - costAmount;
+
+  const now = new Date();
+  const invoiceNumber = `INV-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${Math.floor(100000 + Math.random() * 900000)}`;
 
   const order = await Order.create({
     customer,
     items: normalizedItems,
-    totalAmount,
+    subtotal: toMoney(subtotal),
+    taxRate: Number(gstRate),
+    taxAmount: toMoney(taxAmount),
+    totalAmount: toMoney(totalAmount),
+    costAmount: toMoney(costAmount),
+    profitAmount: toMoney(profitAmount),
+    invoiceNumber,
     createdBy: req.user._id
   });
 
-  res.status(201).json({ success: true, data: order });
+  await Promise.all(
+    normalizedItems.map((item) =>
+      Product.updateOne(
+        { _id: item.product },
+        {
+          $inc: { stock: -item.quantity },
+          $set: { updatedAt: new Date() }
+        }
+      )
+    )
+  );
+
+  const updatedProducts = await Product.find({ _id: { $in: productIds } }, 'name sku stock lowStockThreshold').lean();
+  const lowStockAlerts = updatedProducts
+    .filter((product) => product.stock <= product.lowStockThreshold)
+    .map((product) => ({
+      productId: String(product._id),
+      name: product.name,
+      sku: product.sku,
+      stock: product.stock,
+      threshold: product.lowStockThreshold
+    }));
+
+  res.status(201).json({
+    success: true,
+    data: order,
+    meta: {
+      updatedProducts,
+      lowStockAlerts
+    }
+  });
 });
 
 const getOrders = asyncHandler(async (req, res) => {
@@ -43,7 +94,7 @@ const getOrders = asyncHandler(async (req, res) => {
     Order.find()
       .populate('customer', 'name email phone')
       .populate('createdBy', 'fullName email')
-      .populate('items.product', 'name sku')
+      .populate('items.product', 'name sku price costPrice')
       .skip(skip)
       .limit(limit)
       .sort({ createdAt: -1 }),
@@ -57,4 +108,109 @@ const getOrders = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { createOrder, getOrders };
+const getOrderInvoicePdf = asyncHandler(async (req, res) => {
+  const order = await Order.findById(req.params.id)
+    .populate('customer', 'name email phone')
+    .populate('items.product', 'name sku');
+
+  if (!order) throw createHttpError(404, 'Order not found');
+
+  const pdfBuffer = buildInvoicePdfBuffer(order);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${order.invoiceNumber || `invoice-${order._id}`}.pdf"`);
+  res.send(pdfBuffer);
+});
+
+const escapeCsv = (value) => {
+  if (value === null || value === undefined) return '';
+  const stringValue = String(value);
+  if (/[,"\n]/.test(stringValue)) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+  return stringValue;
+};
+
+const exportOrdersCsv = asyncHandler(async (req, res) => {
+  const orders = await Order.find()
+    .populate('customer', 'name email')
+    .populate('items.product', 'name sku')
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const header = [
+    'invoiceNumber',
+    'date',
+    'customer',
+    'items',
+    'subtotal',
+    'gstRate',
+    'gstAmount',
+    'totalAmount',
+    'costAmount',
+    'profitAmount',
+    'status'
+  ];
+
+  const rows = orders.map((order) => {
+    const itemSummary = order.items
+      .map((item) => `${item.product?.name || 'N/A'} x${item.quantity} @ ${item.unitPrice}`)
+      .join(' | ');
+
+    return [
+      order.invoiceNumber,
+      new Date(order.createdAt).toISOString(),
+      order.customer?.name || 'Walk-in',
+      itemSummary,
+      order.subtotal,
+      order.taxRate,
+      order.taxAmount,
+      order.totalAmount,
+      order.costAmount,
+      order.profitAmount,
+      order.status
+    ]
+      .map(escapeCsv)
+      .join(',');
+  });
+
+  const csv = [header.join(','), ...rows].join('\n');
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="orders-report.csv"');
+  res.send(csv);
+});
+
+const getSalesAnalytics = asyncHandler(async (req, res) => {
+  const period = req.query.period === 'monthly' ? 'monthly' : 'daily';
+
+  const groupId =
+    period === 'monthly'
+      ? {
+          year: { $year: '$createdAt' },
+          month: { $month: '$createdAt' }
+        }
+      : {
+          year: { $year: '$createdAt' },
+          month: { $month: '$createdAt' },
+          day: { $dayOfMonth: '$createdAt' }
+        };
+
+  const analytics = await Order.aggregate([
+    {
+      $group: {
+        _id: groupId,
+        orders: { $sum: 1 },
+        revenue: { $sum: '$totalAmount' },
+        gstCollected: { $sum: '$taxAmount' },
+        cost: { $sum: '$costAmount' },
+        profit: { $sum: '$profitAmount' }
+      }
+    },
+    { $sort: { '_id.year': -1, '_id.month': -1, '_id.day': -1 } },
+    { $limit: 60 }
+  ]);
+
+  res.json({ success: true, data: analytics, meta: { period } });
+});
+
+module.exports = { createOrder, getOrders, getOrderInvoicePdf, exportOrdersCsv, getSalesAnalytics };

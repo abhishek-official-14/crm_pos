@@ -145,7 +145,30 @@ export const api = {
 
   async createOrder(payload) {
     const { data } = await apiClient.post('/orders', payload);
-    return normalizeEntity(data.data);
+    return {
+      order: normalizeEntity(data.data),
+      meta: data.meta || {},
+    };
+  },
+
+  async getOrderAnalytics(params = {}) {
+    const { data } = await requestWithRetry(
+      () => apiClient.get('/orders/analytics', { params }),
+      { retries: 2, retryDelayMs: 500 },
+    );
+
+    return {
+      items: data.data || [],
+      meta: data.meta || {},
+    };
+  },
+
+  getOrderInvoiceDownloadUrl(orderId) {
+    return `${apiClient.defaults.baseURL}/orders/${orderId}/invoice.pdf`;
+  },
+
+  getOrdersCsvExportUrl() {
+    return `${apiClient.defaults.baseURL}/orders/export/csv`;
   },
 };
 
