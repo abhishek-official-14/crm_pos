@@ -27,6 +27,7 @@ Production-style backend scaffold using MVC architecture.
    ```bash
    POST /api/auth/seed-roles
    ```
+   In production, include setup header: `x-setup-secret: <SETUP_SECRET>`.
 4. Start server:
    ```bash
    npm run dev
@@ -42,6 +43,7 @@ Production-style backend scaffold using MVC architecture.
 
 ## Notes
 
-- Register users after seeding roles.
+- Public registration creates `STAFF` users only.
+- Create `ADMIN` users directly in the database or via a protected admin workflow.
 - Product creation is admin-only.
 - Add bearer token in `Authorization: Bearer <token>` for protected routes.

@@ -5,7 +5,7 @@ const User = require('../models/user.model');
 
 const authenticate = async (req, res, next) => {
   const authHeader = req.headers.authorization || '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
 
   if (!token) {
     return next(createHttpError(401, 'Authentication token missing'));
@@ -13,7 +13,7 @@ const authenticate = async (req, res, next) => {
 
   try {
     const payload = jwt.verify(token, env.jwtSecret);
-    const user = await User.findById(payload.id).populate('role');
+    const user = await User.findById(payload.id).populate('role', 'name');
 
     if (!user || !user.isActive) {
       return next(createHttpError(401, 'User not found or inactive'));
